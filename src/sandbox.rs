@@ -50,11 +50,11 @@ impl Sandbox {
     /// To persist, update `self.config.readonly_dirs` and call `self.config.save`.
     pub fn add_readonly_dirs(&mut self, dirs: &[PathBuf]) {
         for dir in dirs {
-            if let Ok(canonical) = dir.canonicalize() {
-                if !self.readonly_roots.contains(&canonical) {
-                    log::debug!("readonly dir added: {}", canonical.display());
-                    self.readonly_roots.push(canonical);
-                }
+            if let Ok(canonical) = dir.canonicalize()
+                && !self.readonly_roots.contains(&canonical)
+            {
+                log::debug!("readonly dir added: {}", canonical.display());
+                self.readonly_roots.push(canonical);
             }
             if !self.config.readonly_dirs.contains(dir) {
                 self.config.readonly_dirs.push(dir.clone());
@@ -94,7 +94,10 @@ impl Sandbox {
         } else {
             self.root.join(path)
         };
-        let normalized = normalize_path(&raw);
+        // Resolve symlinks so the boundary check is consistent with the
+        // canonicalized paths stored in `readonly_roots` and `self.root`.
+        // Fall back to lexical normalization when the path doesn't exist yet.
+        let normalized = raw.canonicalize().unwrap_or_else(|_| normalize_path(&raw));
         if self.is_within_allowed_read(&normalized) {
             Ok(normalized)
         } else {

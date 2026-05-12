@@ -20,6 +20,9 @@ pub enum SandboxError {
     #[error("Path escape: '{0}' resolves outside the sandbox root")]
     PathEscape(String),
 
+    #[error("Read restricted: '{0}' is not within the sandbox or any configured readonly directory")]
+    ReadRestricted(String),
+
     #[error("Invalid sandbox directory: {0}")]
     InvalidDir(String),
 

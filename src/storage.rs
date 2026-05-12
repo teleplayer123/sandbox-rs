@@ -44,6 +44,7 @@ pub fn save_response(sandbox: &Sandbox, filename: Option<&str>, resp: &HttpRespo
     let envelope = SavedResponse::from_http(resp);
     let json = serde_json::to_string_pretty(&envelope)?;
     std::fs::write(&dest, json)?;
+    log::info!("response saved → {}", dest.display());
 
     Ok(dest)
 }

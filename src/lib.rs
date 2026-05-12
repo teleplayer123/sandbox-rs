@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod http;
+pub mod logging;
 pub mod platform;
 pub mod sandbox;
 pub mod storage;

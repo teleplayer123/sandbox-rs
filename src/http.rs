@@ -42,16 +42,20 @@ impl HttpClient {
     }
 
     pub fn get(&self, opts: RequestOptions, config: &Config) -> Result<HttpResponse> {
+        log::info!("GET {}", opts.url);
         let resp = self
             .client
             .get(opts.url)
             .headers(build_headers(&opts.headers, config)?)
             .query(&opts.query)
             .send()?;
-        read_response(resp)
+        let r = read_response(resp)?;
+        log::debug!("← HTTP {}", r.status);
+        Ok(r)
     }
 
     pub fn post_json(&self, opts: RequestOptions, body: Value, config: &Config) -> Result<HttpResponse> {
+        log::info!("POST {} (json)", opts.url);
         let resp = self
             .client
             .post(opts.url)
@@ -59,7 +63,9 @@ impl HttpClient {
             .query(&opts.query)
             .json(&body)
             .send()?;
-        read_response(resp)
+        let r = read_response(resp)?;
+        log::debug!("← HTTP {}", r.status);
+        Ok(r)
     }
 
     pub fn post_form(
@@ -68,6 +74,7 @@ impl HttpClient {
         form: Vec<(String, String)>,
         config: &Config,
     ) -> Result<HttpResponse> {
+        log::info!("POST {} (form)", opts.url);
         let resp = self
             .client
             .post(opts.url)
@@ -75,7 +82,9 @@ impl HttpClient {
             .query(&opts.query)
             .form(&form)
             .send()?;
-        read_response(resp)
+        let r = read_response(resp)?;
+        log::debug!("← HTTP {}", r.status);
+        Ok(r)
     }
 }
 

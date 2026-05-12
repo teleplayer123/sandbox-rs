@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 use sandbox_rs::{
+    config::LogConfig,
     error::{Result, SandboxError},
     http::{HttpClient, RequestOptions},
+    logging,
     platform,
     sandbox::Sandbox,
     storage,
@@ -22,6 +24,15 @@ struct Cli {
     /// Sandbox root directory (defaults to the OS data dir for this platform)
     #[arg(short, long, value_name = "DIR")]
     dir: Option<PathBuf>,
+
+    /// Allow reads from this directory even though it is outside the sandbox root.
+    /// Repeatable. Use with `init` to persist; other commands apply for this session only.
+    #[arg(short = 'R', long = "readonly", value_name = "DIR")]
+    readonly: Vec<PathBuf>,
+
+    /// Disable file logging for this session, overriding sandbox.toml.
+    #[arg(long)]
+    no_log: bool,
 
     #[command(subcommand)]
     command: Cmd,
@@ -58,6 +69,9 @@ enum Cmd {
         /// Form fields: "key=value" — sends application/x-www-form-urlencoded
         #[arg(short, long, value_name = "KEY=VALUE", group = "body")]
         form: Vec<String>,
+        /// Read the request body from a file (may be inside a readonly dir)
+        #[arg(long, value_name = "PATH", group = "body")]
+        body_file: Option<PathBuf>,
         /// Extra headers: "Name: Value" (repeatable)
         #[arg(short = 'H', long = "header", value_name = "HEADER")]
         headers: Vec<String>,
@@ -78,7 +92,7 @@ enum Cmd {
     /// Print a saved response by filename
     Show { filename: String },
 
-    /// Print the current sandbox config
+    /// Print the current sandbox config (includes readonly_dirs)
     Config,
 }
 
@@ -86,6 +100,7 @@ enum Cmd {
 
 fn main() {
     if let Err(e) = run() {
+        log::error!("{e}");
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -98,27 +113,59 @@ fn run() -> Result<()> {
 
     match cli.command {
         Cmd::Init => {
-            let sb = Sandbox::init(&dir)?;
+            let mut sb = Sandbox::init(&dir)?;
+            if !cli.readonly.is_empty() {
+                sb.add_readonly_dirs(&cli.readonly);
+                sb.config.save(&sb.root)?;
+                println!("Readonly dirs saved to config.");
+            }
+            if cli.no_log {
+                sb.config.log.enabled = false;
+                sb.config.save(&sb.root)?;
+                println!("Logging disabled and saved to config.");
+            }
+            start_logging(&sb, false)?; // respect whatever is now in config
+            log::info!("sandbox initialized (platform={})", plat.name());
             println!("Platform     : {}", plat.name());
             println!("Sandbox root : {}", sb.root.display());
             println!("Responses dir: {}", sb.config.response_dir_path(&sb.root).display());
+            println!("Log file     : {}", if sb.config.log.enabled {
+                sb.root.join(&sb.config.log.file).display().to_string()
+            } else {
+                "disabled".to_string()
+            });
+            if !sb.config.readonly_dirs.is_empty() {
+                for d in &sb.config.readonly_dirs {
+                    println!("Readonly dir : {}", d.display());
+                }
+            }
             println!("Initialized.");
         }
 
         Cmd::Get { url, headers, query, save, print } => {
-            let sb = Sandbox::init(&dir)?;
+            let mut sb = Sandbox::init(&dir)?;
+            sb.add_readonly_dirs(&cli.readonly);
+            start_logging(&sb, cli.no_log)?;
             let client = HttpClient::new(&sb.config)?;
             let resp = client.get(build_opts(&url, headers, query)?, &sb.config)?;
             print_status(resp.status);
             handle_output(&sb, resp, save, print)?;
         }
 
-        Cmd::Post { url, json, form, headers, query, save, print } => {
-            let sb = Sandbox::init(&dir)?;
+        Cmd::Post { url, json, form, body_file, headers, query, save, print } => {
+            let mut sb = Sandbox::init(&dir)?;
+            sb.add_readonly_dirs(&cli.readonly);
+            start_logging(&sb, cli.no_log)?;
             let client = HttpClient::new(&sb.config)?;
             let opts = build_opts(&url, headers, query)?;
 
             let resp = if let Some(raw) = json {
+                let body: Value = serde_json::from_str(&raw).map_err(SandboxError::Json)?;
+                client.post_json(opts, body, &sb.config)?
+            } else if let Some(file_path) = body_file {
+                let path_str = file_path.to_string_lossy().into_owned();
+                let resolved = sb.safe_read_path(&path_str)?;
+                let raw = std::fs::read_to_string(&resolved)?;
                 let body: Value = serde_json::from_str(&raw).map_err(SandboxError::Json)?;
                 client.post_json(opts, body, &sb.config)?
             } else if !form.is_empty() {
@@ -133,6 +180,7 @@ fn run() -> Result<()> {
 
         Cmd::List => {
             let sb = Sandbox::init(&dir)?;
+            start_logging(&sb, cli.no_log)?;
             let files = storage::list_responses(&sb)?;
             if files.is_empty() {
                 println!("No saved responses.");
@@ -145,6 +193,7 @@ fn run() -> Result<()> {
 
         Cmd::Show { filename } => {
             let sb = Sandbox::init(&dir)?;
+            start_logging(&sb, cli.no_log)?;
             let saved = storage::load_response(&sb, &filename)?;
             println!("URL    : {}", saved.url);
             println!("Status : {}", saved.status);
@@ -159,6 +208,7 @@ fn run() -> Result<()> {
 
         Cmd::Config => {
             let sb = Sandbox::init(&dir)?;
+            start_logging(&sb, cli.no_log)?;
             let raw = toml::to_string_pretty(&sb.config).map_err(SandboxError::TomlSer)?;
             println!("{raw}");
         }
@@ -168,6 +218,15 @@ fn run() -> Result<()> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Start the file logger, respecting the `--no-log` override.
+fn start_logging(sb: &Sandbox, no_log: bool) -> Result<()> {
+    let effective = LogConfig {
+        enabled: sb.config.log.enabled && !no_log,
+        ..sb.config.log.clone()
+    };
+    logging::init(&effective, &sb.root)
+}
 
 fn resolve_dir(explicit: Option<PathBuf>, plat: &dyn platform::Platform) -> PathBuf {
     explicit

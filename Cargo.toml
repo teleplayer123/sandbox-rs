@@ -1,0 +1,25 @@
+[package]
+name = "sandbox-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "sandbox_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sandbox"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+reqwest = { version = "0.12", features = ["blocking", "json", "native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
